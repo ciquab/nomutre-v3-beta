@@ -538,9 +538,9 @@ export const renderQuickButtons = (logs) => {
             <span class="absolute top-0 right-0 bg-indigo-500 text-white text-[9px] px-2 py-0.5 rounded-bl-lg opacity-80">HISTORY</span>
             <span class="text-2xl mb-1 group-hover:scale-110 transition-transform">🍺</span>
             <span class="text-xs leading-tight">${styleEsc}</span>
-            <span class="text-xs leading-tight">${styleEsc}</span>
             <span class="text-[10px] opacity-70">${sizeEsc}</span>
         </button>`;
     }).join('');
 
 };
+
