@@ -1,4 +1,5 @@
 import { EXERCISE, CALORIES, SIZE_DATA, STYLE_METADATA } from '../constants.js';
+import { Calc } from '../logic.js';
 import { Store } from '../store.js';
 import { StateManager } from './state.js';
 import { DOM, toggleModal, escapeHtml, toggleDryDay } from './dom.js';
@@ -541,4 +542,5 @@ export const renderQuickButtons = (logs) => {
             <span class="text-[10px] opacity-70">${sizeEsc}</span>
         </button>`;
     }).join('');
+
 };
