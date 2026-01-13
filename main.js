@@ -1,5 +1,5 @@
 import { APP, EXERCISE, SIZE_DATA, CALORIES } from './constants.js';
-import { Store, ExternalApp, db } from './store.js'; // dbはマイグレーション用に一時的に必要
+import { Store, ExternalApp, db } from './store.js'; 
 import { Calc } from './logic.js';
 import { UI, StateManager, updateBeerSelectOptions, refreshUI, toggleModal } from './ui/index.js';
 import { Service } from './service.js';
@@ -9,7 +9,7 @@ import { initErrorHandler } from './errorHandler.js';
 import dayjs from 'https://cdn.jsdelivr.net/npm/dayjs@1.11.10/+esm';
 
 /* ==========================================================================
-   Initialization
+   Initialization & Global State
    ========================================================================== */
 
 // グローバルエラーハンドリングの初期化
@@ -19,14 +19,72 @@ initErrorHandler();
 let editingLogId = null;
 let editingCheckId = null;
 
+// ライフサイクル管理用: 最後にアクティブだった日付
+const LAST_ACTIVE_KEY = 'nomutore_last_active_date';
+let lastActiveDate = localStorage.getItem(LAST_ACTIVE_KEY) || dayjs().format('YYYY-MM-DD');
+
+/* ==========================================================================
+   Lifecycle Management
+   ========================================================================== */
+
+let isResuming = false;
+
+/**
+ * アプリのライフサイクルイベント（復帰、日跨ぎ）を監視・処理する
+ */
+const setupLifecycleListeners = () => {
+    // 1. Visibility Change
+    document.addEventListener('visibilitychange', async () => {
+        if (document.visibilityState === 'visible') {
+            await handleAppResume();
+        }
+    });
+
+    // 2. 定期チェック (1分毎)
+    setInterval(() => {
+        const current = dayjs().format('YYYY-MM-DD');
+        if (current !== lastActiveDate) {
+            handleAppResume();
+        }
+    }, 60000);
+};
+
+/**
+ * アプリ復帰・日付変更時の処理
+ */
+const handleAppResume = async () => {
+    if (isResuming) return;
+    isResuming = true;
+
+    try {
+        const today = dayjs().format('YYYY-MM-DD');
+        const isNewDay = today !== lastActiveDate;
+
+        if (isNewDay) {
+            console.log(`[Lifecycle] Day changed: ${lastActiveDate} -> ${today}`);
+            lastActiveDate = today;
+            localStorage.setItem(LAST_ACTIVE_KEY, today);
+
+            // 日付が変わったら今日のチェックインレコードを確保
+            await Service.ensureTodayCheckRecord();
+            
+            // Note: Timerの状態復元はここで行わない（副作用防止）。
+            // 日跨ぎ時のタイマー停止/継続判断は Timer 内部またはユーザー操作に委ねる。
+        }
+
+        // 画面のみリフレッシュ
+        await refreshUI();
+        
+    } finally {
+        isResuming = false;
+    }
+};
+
 /* ==========================================================================
    Event Handlers (UI -> Service/Logic)
    ========================================================================== */
 
-/**
- * 設定保存
- */
-const handleSaveSettings = () => {
+const handleSaveSettings = async () => {
     const getVal = (id) => document.getElementById(id).value;
     const w = parseFloat(getVal('weight-input'));
     const h = parseFloat(getVal('height-input'));
@@ -50,23 +108,19 @@ const handleSaveSettings = () => {
         
         toggleModal('settings-modal', false);
         
-        // UIへ反映
         UI.updateModeSelector();
         updateBeerSelectOptions();
         const recordSelect = document.getElementById('exercise-select');
         if (recordSelect) recordSelect.value = getVal('setting-default-record-exercise');
         
         UI.applyTheme(getVal('theme-input'));
-        refreshUI();
+        await refreshUI();
         UI.showMessage('設定を保存しました', 'success');
     } else {
         UI.showMessage('すべての項目を正しく入力してください', 'error');
     }
 };
 
-/**
- * 飲酒ログ保存 (モーダルより)
- */
 const handleBeerSubmit = async (e) => {
     e.preventDefault();
     const inputData = UI.getBeerFormData();
@@ -75,14 +129,13 @@ const handleBeerSubmit = async (e) => {
         return UI.showMessage('入力値を確認してください', 'error');
     }
 
-    // Service層へ委譲
     await Service.saveBeerLog(inputData, editingLogId);
 
     editingLogId = null;
     toggleModal('beer-modal', false);
     UI.resetBeerForm();
+    await refreshUI();
 
-    // Untappd連携
     if (inputData.useUntappd) {
         let term = inputData.brand;
         if (inputData.brewery) term = `${inputData.brewery} ${inputData.brand}`;
@@ -91,25 +144,16 @@ const handleBeerSubmit = async (e) => {
     }
 };
 
-/**
- * 連続保存 (保存して次へ)
- */
 const handleSaveAndNext = async () => {
     const inputData = UI.getBeerFormData();
     if (!inputData.isValid) {
         return UI.showMessage('入力値を確認してください', 'error');
     }
-
-    // Service層へ委譲 (常に新規)
     await Service.saveBeerLog(inputData, null);
-    
-    // フォームを一部リセットして継続
     UI.resetBeerForm(true); 
+    await refreshUI();
 };
 
-/**
- * 運動手入力保存
- */
 const handleManualExerciseSubmit = async () => {
     const dateVal = document.getElementById('manual-date').value;
     const m = parseFloat(document.getElementById('manual-minutes').value);
@@ -123,17 +167,14 @@ const handleManualExerciseSubmit = async () => {
     document.getElementById('manual-minutes').value = '';
     toggleModal('manual-exercise-modal', false);
     editingLogId = null;
+    await refreshUI();
 };
 
-/**
- * デイリーチェック保存
- */
 const handleCheckSubmit = async (e) => {
     e.preventDefault();
     const f = document.getElementById('check-form');
     const w = document.getElementById('check-weight').value;
     
-    // 体重バリデーション
     let weightVal = null;
     if (w !== '') {
         weightVal = parseFloat(w);
@@ -150,18 +191,16 @@ const handleCheckSubmit = async (e) => {
         weight: weightVal
     };
 
-    // Serviceへ委譲 (ID管理はService側またはDBクエリで解決)
-    await Service.saveDailyCheck(formData);
+    await Service.saveDailyCheck(formData, editingCheckId);
 
     toggleModal('check-modal', false);
     document.getElementById('is-dry-day').checked = false;
     document.getElementById('check-weight').value = '';
     document.getElementById('drinking-section').classList.remove('hidden-area');
+    editingCheckId = null;
+    await refreshUI();
 };
 
-/**
- * SNSシェア (テキスト生成のみUIロジックとして保持)
- */
 const handleShare = async () => {
     const { logs, checks } = await Service.getAllDataForUI();
     const profile = Store.getProfile();
@@ -171,7 +210,14 @@ const handleShare = async () => {
     const baseExData = EXERCISE[baseEx] || EXERCISE['stepper'];
 
     const totalKcal = logs.reduce((sum, l) => {
-        const val = l.kcal !== undefined ? l.kcal : (l.minutes * Calc.burnRate(6.0, profile));
+        let val = l.kcal;
+        // [Fix] kcal未定義時のFallback計算ロジックを統一
+        // 常に exerciseKey (無ければ baseEx or stepper) のMETsを使用
+        if (val === undefined) {
+            const exKey = l.exerciseKey || 'stepper';
+            const met = (EXERCISE[exKey] || EXERCISE['stepper']).met;
+            val = l.minutes * Calc.burnRate(met, profile);
+        }
         return sum + val;
     }, 0);
 
@@ -196,8 +242,7 @@ const handleDetailShare = async () => {
     const modal = document.getElementById('log-detail-modal');
     if (!modal || !modal.dataset.id) return;
     
-    // 詳細データはUIからではなくDBから再取得が安全
-    const logs = await db.logs.toArray(); // Service経由でも良いが単件取得メソッドがないため
+    const logs = await db.logs.toArray();
     const log = logs.find(l => l.id === parseInt(modal.dataset.id));
     if (!log) return;
 
@@ -206,18 +251,27 @@ const handleDetailShare = async () => {
     const baseExData = EXERCISE[baseEx] || EXERCISE['stepper'];
     let text = '';
 
-    const isDebt = (log.kcal !== undefined ? log.kcal : log.minutes) < 0;
+    const isDebt = (log.kcal !== undefined)
+        ? log.kcal < 0
+        : ((log.minutes < 0) || !!log.brand || !!log.style);
 
     if (isDebt) {
-        const kcalVal = Math.abs(log.kcal !== undefined ? log.kcal : log.minutes * Calc.burnRate(6.0, profile));
-        const debtMins = Calc.convertKcalToMinutes(kcalVal, baseEx, profile);
+        // [Fix] Fallback計算の統一
+        let kcalVal = log.kcal;
+        if (kcalVal === undefined) {
+            const exKey = log.exerciseKey || 'stepper'; // 飲酒ログでも便宜上stepper強度で計算されるケースへの備え
+            const met = (EXERCISE[exKey] || EXERCISE['stepper']).met;
+            kcalVal = log.minutes * Calc.burnRate(met, profile);
+        }
+        
+        const debtMins = Calc.convertKcalToMinutes(Math.abs(kcalVal), baseEx, profile);
         const beerName = log.brand || log.style || 'ビール';
         text = `🍺 飲みました: ${beerName}\n| 借金発生: ${baseExData.label}換算で${debtMins}分…😱\n#ノムトレ`;
     } else {
-        const exKey = log.exerciseKey || 'stepper'; // 簡易フォールバック
+        const exKey = log.exerciseKey || 'stepper';
         const exData = EXERCISE[exKey] || EXERCISE['stepper'];
         const mode1 = localStorage.getItem(APP.STORAGE_KEYS.MODE1) || APP.DEFAULTS.MODE1;
-        const earnedKcal = log.kcal !== undefined ? log.kcal : 0; // 古いデータは割愛
+        const earnedKcal = log.kcal !== undefined ? log.kcal : 0;
         const beerCount = Calc.convertKcalToBeerCount(earnedKcal, mode1);
         text = `🏃‍♀️ 運動しました: ${exData.label}\n| 借金返済: ${mode1}${beerCount}本分を返済！🍺\n#ノムトレ`;
     }
@@ -237,27 +291,33 @@ const shareToSocial = async (text) => {
    Data Migration (Startup only)
    ========================================================================== */
 async function migrateData() {
-    // 1. LocalStorage -> IndexedDB
     const oldLogs = localStorage.getItem(APP.STORAGE_KEYS.LOGS);
     const oldChecks = localStorage.getItem(APP.STORAGE_KEYS.CHECKS);
-    if (oldLogs) {
-        try { const logs = JSON.parse(oldLogs); if (logs.length > 0) await db.logs.bulkAdd(logs); } catch (e) {}
-        localStorage.removeItem(APP.STORAGE_KEYS.LOGS);
-    }
-    if (oldChecks) {
-        try { const checks = JSON.parse(oldChecks); if (checks.length > 0) await db.checks.bulkAdd(checks); } catch (e) {}
-        localStorage.removeItem(APP.STORAGE_KEYS.CHECKS);
-    }
-
-    // 2. Schema v1 (minutes) -> v2 (kcal)
-    const logs = await db.logs.toArray();
-    const needsUpdate = logs.filter(l => l.kcal === undefined && l.minutes !== undefined);
-    if (needsUpdate.length > 0) {
-        const profile = Store.getProfile();
-        const stepperRate = Calc.burnRate(6.0, profile);
-        for (const log of needsUpdate) {
-            await db.logs.update(log.id, { kcal: log.minutes * stepperRate });
+    try {
+        if (oldLogs) {
+            const logs = JSON.parse(oldLogs); if (logs.length > 0) await db.logs.bulkAdd(logs);
+            localStorage.removeItem(APP.STORAGE_KEYS.LOGS);
         }
+        if (oldChecks) {
+            const checks = JSON.parse(oldChecks); if (checks.length > 0) await db.checks.bulkAdd(checks);
+            localStorage.removeItem(APP.STORAGE_KEYS.CHECKS);
+        }
+
+        const logs = await db.logs.toArray();
+        const needsUpdate = logs.filter(l => l.kcal === undefined && l.minutes !== undefined);
+        if (needsUpdate.length > 0) {
+            const profile = Store.getProfile();
+            for (const log of needsUpdate) {
+                // exerciseKeyを尊重して再計算
+                const key = log.exerciseKey || 'stepper';
+                const exData = EXERCISE[key] || EXERCISE['stepper'];
+                const met = exData.met || 6.0;
+                const rate = Calc.burnRate(met, profile);
+                await db.logs.update(log.id, { kcal: log.minutes * rate });
+            }
+        }
+    } catch (e) {
+        console.warn('[migrateData] Migration failed or partial:', e);
     }
 }
 
@@ -265,12 +325,16 @@ async function migrateData() {
    Event Binding & Bootstrap
    ========================================================================== */
 
-// スワイプ処理
 let touchStartX = 0;
+let touchStartY = 0;
+
 const TABS = ['tab-home', 'tab-record', 'tab-history'];
 const handleTouchEnd = (e) => {
     const diffX = e.changedTouches[0].screenX - touchStartX;
-    if (Math.abs(diffX) > 60 && Math.abs(e.changedTouches[0].screenY - e.changedTouches[0].screenY) < 50) { // Y軸判定は簡易化
+    const diffY = e.changedTouches[0].screenY - touchStartY;
+    
+    // Y方向のブレが少ない場合のみスワイプと判定
+    if (Math.abs(diffX) > 60 && Math.abs(diffY) < 50) { 
         const currentTabId = document.querySelector('.tab-content.active').id;
         const idx = TABS.indexOf(currentTabId);
         if (diffX < 0 && idx < TABS.length - 1) UI.switchTab(TABS[idx + 1]);
@@ -279,7 +343,6 @@ const handleTouchEnd = (e) => {
 };
 
 function bindEvents() {
-    // UI Navigation
     document.getElementById('btn-open-help')?.addEventListener('click', UI.openHelp);
     document.getElementById('btn-open-settings')?.addEventListener('click', UI.openSettings);
     ['home', 'record', 'history'].forEach(t => 
@@ -288,16 +351,18 @@ function bindEvents() {
 
     const swipeArea = document.getElementById('swipe-area');
     if (swipeArea) {
-        swipeArea.addEventListener('touchstart', (e) => touchStartX = e.changedTouches[0].screenX, {passive: true});
+        swipeArea.addEventListener('touchstart', (e) => {
+            touchStartX = e.changedTouches[0].screenX;
+            touchStartY = e.changedTouches[0].screenY;
+        }, {passive: true});
         swipeArea.addEventListener('touchend', handleTouchEnd);
     }
 
-    // Modals & Forms
     document.getElementById('home-mode-select')?.addEventListener('change', (e) => UI.setBeerMode(e.target.value));
     
     document.getElementById('liver-rank-card')?.addEventListener('click', async () => {
         const todayStr = dayjs().format('YYYY-MM-DD');
-        const checks = await db.checks.toArray(); // Service経由でも良いが、ID特定のため
+        const checks = await db.checks.toArray();
         const target = checks.find(c => dayjs(c.timestamp).format('YYYY-MM-DD') === todayStr);
         editingCheckId = target ? target.id : null;
         UI.openCheckModal(target);
@@ -320,23 +385,37 @@ function bindEvents() {
         });
     });
 
+    // [Fix] モーダルごとにリセットすべきIDを判断してクリアする
     document.querySelectorAll('.btn-close-modal').forEach(btn => {
         btn.addEventListener('click', (e) => {
-            toggleModal(e.target.closest('.modal-bg').id, false);
-            editingLogId = null; editingCheckId = null;
+            const modalId = e.target.closest('.modal-bg').id;
+            toggleModal(modalId, false);
+            
+            // 状態リセットの粒度を改善
+            if (['beer-modal', 'manual-exercise-modal', 'log-detail-modal'].includes(modalId)) {
+                editingLogId = null;
+            }
+            if (['check-modal'].includes(modalId)) {
+                editingCheckId = null;
+            }
         });
     });
     
+    // モーダル背景クリック時も同様に判定
     document.querySelectorAll('.modal-bg').forEach(modal => {
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
                 toggleModal(modal.id, false);
-                editingLogId = null; editingCheckId = null;
+                if (['beer-modal', 'manual-exercise-modal', 'log-detail-modal'].includes(modal.id)) {
+                    editingLogId = null;
+                }
+                if (['check-modal'].includes(modal.id)) {
+                    editingCheckId = null;
+                }
             }
         });
     });
 
-    // Timer & Manual Record
     document.getElementById('start-stepper-btn')?.addEventListener('click', Timer.start);
     document.getElementById('pause-stepper-btn')?.addEventListener('click', Timer.pause);
     document.getElementById('resume-stepper-btn')?.addEventListener('click', Timer.resume);
@@ -347,7 +426,6 @@ function bindEvents() {
         UI.openManualInput();
     });
 
-    // Action Buttons
     document.getElementById('btn-open-beer')?.addEventListener('click', () => { editingLogId = null; UI.openBeerModal(null); });
     document.getElementById('btn-open-check')?.addEventListener('click', () => { editingCheckId = null; UI.openCheckModal(null); });
     
@@ -359,7 +437,6 @@ function bindEvents() {
     
     document.getElementById('is-dry-day')?.addEventListener('change', function() { UI.toggleDryDay(this); });
 
-    // Sharing & Data Management
     document.getElementById('btn-share-sns')?.addEventListener('click', handleShare);
     document.getElementById('btn-detail-share')?.addEventListener('click', handleDetailShare);
     
@@ -379,7 +456,6 @@ function bindEvents() {
         }
     });
 
-    // Log List Interactions
     const logList = document.getElementById('log-list');
     logList?.addEventListener('click', async (e) => {
         if (e.target.classList.contains('log-checkbox')) return;
@@ -388,6 +464,7 @@ function bindEvents() {
         if (deleteBtn) {
             e.stopPropagation();
             await Service.deleteLog(deleteBtn.dataset.id);
+            await refreshUI(); // UI同期を確実に
             return;
         }
         
@@ -404,12 +481,13 @@ function bindEvents() {
         }
     });
 
-    // Log Detail Modal Actions
-    document.getElementById('btn-detail-delete')?.addEventListener('click', () => {
+    document.getElementById('btn-detail-delete')?.addEventListener('click', async () => {
         const id = document.getElementById('log-detail-modal').dataset.id;
         if (id) {
-            Service.deleteLog(id);
+            await Service.deleteLog(id);
             toggleModal('log-detail-modal', false);
+            editingLogId = null;
+            await refreshUI();
         }
     });
 
@@ -419,24 +497,24 @@ function bindEvents() {
         if (log) {
             editingLogId = id;
             toggleModal('log-detail-modal', false);
-            const isDebt = (log.kcal !== undefined ? log.kcal : log.minutes) < 0;
+            const isDebt = (log.kcal !== undefined) ? log.kcal < 0 : ((log.minutes < 0) || !!log.brand);
             isDebt ? UI.openBeerModal(log) : UI.openManualInput(log);
         }
     });
 
-    // Edit Mode & Bulk Actions
     document.getElementById('btn-toggle-edit-mode')?.addEventListener('click', UI.toggleEditMode);
     document.getElementById('btn-select-all')?.addEventListener('click', UI.toggleSelectAll);
     document.getElementById('btn-bulk-delete')?.addEventListener('click', async () => {
         const ids = Array.from(document.querySelectorAll('.log-checkbox:checked')).map(cb => parseInt(cb.value));
-        if (ids.length > 0) await Service.bulkDeleteLogs(ids);
+        if (ids.length > 0) {
+            await Service.bulkDeleteLogs(ids);
+            await refreshUI(); // 明示的にUI更新
+        }
     });
 
-    // Heatmap Pagination
     document.getElementById('heatmap-prev')?.addEventListener('click', () => { StateManager.incrementHeatmapOffset(); refreshUI(); });
     document.getElementById('heatmap-next')?.addEventListener('click', () => { if(StateManager.heatmapOffset > 0) { StateManager.decrementHeatmapOffset(); refreshUI(); }});
 
-    // Heatmap / Status Click
     document.getElementById('heatmap-grid')?.addEventListener('click', async (e) => {
         const cell = e.target.closest('.heatmap-cell');
         if (cell && cell.dataset.date) {
@@ -458,7 +536,6 @@ function bindEvents() {
         }
     });
 
-    // Quick Input
     document.getElementById('quick-input-area')?.addEventListener('click', (e) => {
         const btn = e.target.closest('.quick-beer-btn');
         if (btn) {
@@ -471,14 +548,12 @@ function bindEvents() {
         }
     });
 
-    // Misc
-    document.getElementById('beer-select')?.addEventListener('change', updateBeerSelectOptions); // 実際はmodal.js内updatePresetAbv的な処理が必要だが省略
+    document.getElementById('beer-select')?.addEventListener('change', updateBeerSelectOptions);
     document.getElementById('exercise-select')?.addEventListener('change', function() {
         const nameEl = document.getElementById('manual-exercise-name');
         if(nameEl && EXERCISE[this.value]) nameEl.textContent = EXERCISE[this.value].label;
     });
 
-    // Theme Switcher
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
         if ((localStorage.getItem(APP.STORAGE_KEYS.THEME) || 'system') === 'system') {
             UI.applyTheme('system');
@@ -491,30 +566,30 @@ function bindEvents() {
  * Main Bootstrap
  */
 document.addEventListener('DOMContentLoaded', async () => {
+    // 1. 基本セットアップ
     UI.initDOM();
-
-    // 依存性の注入 (UI <- Service)
     UI.setFetchLogsHandler(Service.getLogsWithPagination);
     UI.setFetchAllDataHandler(Service.getAllDataForUI);
-    
-    // Timer保存ハンドラの注入
     setTimerSaveHandler(async (type, minutes) => {
         await Service.saveExerciseLog(type, minutes, UI.getTodayString(), true, null);
     });
 
-    // 初期設定
-    UI.applyTheme(localStorage.getItem(APP.STORAGE_KEYS.THEME) || APP.DEFAULTS.THEME);
-    bindEvents();
+    // 2. データ整合性の確保
     await migrateData();
+    await Service.ensureTodayCheckRecord();
 
-    // DOM要素の生成（プルダウン等）
+    // 3. イベント・ライフサイクル監視
+    bindEvents();
+    setupLifecycleListeners();
+
+    // 4. 初期描画
     populateSelects();
+    UI.applyTheme(localStorage.getItem(APP.STORAGE_KEYS.THEME) || APP.DEFAULTS.THEME);
     
-    // UI初期描画
     const p = Store.getProfile();
     ['weight-input', 'height-input', 'age-input'].forEach(id => {
         const el = document.getElementById(id);
-        if(el) el.value = p[id.split('-')[0]]; // 簡易マッピング
+        if(el) el.value = p[id.split('-')[0]];
     });
     const gEl = document.getElementById('gender-input');
     if(gEl) gEl.value = p.gender;
@@ -524,12 +599,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     UI.setBeerMode('mode1');
     updateBeerSelectOptions();
 
-    // タイマー復元
+    // 5. 状態復元と最終レンダリング
+    // Timerの復元はDOMContentLoaded時のみ実行する (これが"1か所だけ"の原則)
     if (Timer.restoreState()) {
         UI.switchTab('tab-record');
     } else {
         UI.switchTab('tab-home');
-        // 初回ユーザー向け
         if (!localStorage.getItem(APP.STORAGE_KEYS.WEIGHT)) {
             setTimeout(() => {
                 UI.openSettings();
@@ -540,10 +615,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
+    localStorage.setItem(LAST_ACTIVE_KEY, dayjs().format('YYYY-MM-DD'));
     await refreshUI();
 });
 
-// Helper: プルダウン生成
 function populateSelects() {
     const createOpts = (obj, targetId, useKeyAsVal = false) => {
         const el = document.getElementById(targetId);
@@ -552,7 +627,11 @@ function populateSelects() {
         Object.keys(obj).forEach(k => {
             const o = document.createElement('option');
             o.value = k;
-            o.textContent = useKeyAsVal ? k : (obj[k].label ? `${obj[k].icon} ${obj[k].label}` : obj[k].label);
+            o.textContent = useKeyAsVal
+                ? k
+                : (obj[k].label 
+                    ? (obj[k].icon ? `${obj[k].icon} ${obj[k].label}` : obj[k].label)
+                    : obj[k].label);
             el.appendChild(o);
         });
     };
@@ -564,7 +643,6 @@ function populateSelects() {
     createOpts(CALORIES.STYLES, 'setting-mode-2', true);
     createOpts(SIZE_DATA, 'beer-size');
     
-    // デフォルト値設定
     const defRec = Store.getDefaultRecordExercise();
     const exSel = document.getElementById('exercise-select');
     if(exSel && defRec) exSel.value = defRec;
@@ -589,7 +667,6 @@ const showSwipeCoachMark = () => {
     }, 3500);
 };
 
-// Service Worker Register
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => navigator.serviceWorker.register('./service-worker.js'));
 }

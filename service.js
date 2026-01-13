@@ -1,68 +1,139 @@
 import { db, Store } from './store.js';
 import { Calc } from './logic.js';
-import { APP, EXERCISE, STYLE_SPECS, CALORIES, ALCOHOL_CONSTANTS } from './constants.js'; // ALCOHOL_CONSTANTSを追加
+import { APP, EXERCISE, STYLE_SPECS } from './constants.js';
 import { UI, refreshUI } from './ui/index.js';
 import dayjs from 'https://cdn.jsdelivr.net/npm/dayjs@1.11.10/+esm';
 
-// ローカルヘルパー: アルコールカロリー計算
-// logic.jsを変更せずに、constantsのスペックを活かすためにここで計算する
-const calculateAlcoholCalories = (ml, abv, carbPer100ml) => {
-    // アルコール自体のカロリー: ml * (度数/100) * 比重(0.789) * 7kcal/g
-    const alcoholG = ml * (abv / 100) * ALCOHOL_CONSTANTS.ETHANOL_DENSITY;
-    const alcoholKcal = alcoholG * 7.0; // アルコールは7kcal/g
-
-    // 糖質のカロリー: (ml / 100) * 糖質量(g/100ml) * 4kcal/g
-    const carbKcal = (ml / 100) * carbPer100ml * ALCOHOL_CONSTANTS.CARB_CALORIES;
-
-    return alcoholKcal + carbKcal;
-};
-
 export const Service = {
     /**
+     * 起動時に今日の空チェックインレコードが存在するか確認し、なければ作成する
+     */
+    ensureTodayCheckRecord: async () => {
+        const todayStr = dayjs().format('YYYY-MM-DD');
+        const startOfDay = dayjs().startOf('day').valueOf();
+        const endOfDay = dayjs().endOf('day').valueOf();
+
+        try {
+            const existing = await db.checks.where('timestamp')
+                .between(startOfDay, endOfDay)
+                .first();
+
+            if (!existing) {
+                await db.checks.add({
+                    timestamp: dayjs().valueOf(),
+                    isDryDay: false,
+                    waistEase: false,
+                    footLightness: false,
+                    waterOk: false,
+                    fiberOk: false,
+                    weight: null
+                });
+                console.log(`[Service] Created empty daily check for ${todayStr}`);
+            }
+        } catch (e) {
+            console.error('[Service] Failed to ensure today check record:', e);
+        }
+    },
+
+    /**
+     * 【新規実装】履歴変更時の影響範囲再計算 (カスケード更新)
+     * v2の `recalcDailyExercises` に相当。
+     * 過去のログを変更した際、その日以降のストリークボーナスを全て再計算してDBを更新する。
+     * @param {number} changedTimestamp - 変更があったログの日付(ms)
+     */
+    recalcImpactedHistory: async (changedTimestamp) => {
+        console.log('[Service] Recalculating history from:', dayjs(changedTimestamp).format('YYYY-MM-DD'));
+        
+        const allLogs = await db.logs.toArray();
+        const allChecks = await db.checks.toArray();
+        const profile = Store.getProfile();
+
+        // 変更日当日を含めて、今日までループ
+        const startDate = dayjs(changedTimestamp).startOf('day');
+        const today = dayjs().endOf('day');
+        
+        let currentDate = startDate;
+        let updateCount = 0;
+
+        // 念のため無限ループ防止 (最大365日分)
+        let safeGuard = 0;
+        
+        while (currentDate.isBefore(today) || currentDate.isSame(today, 'day')) {
+            if (safeGuard++ > 365) break;
+
+            const dateKey = currentDate.format('YYYY-MM-DD');
+            const dayStart = currentDate.startOf('day').valueOf();
+            const dayEnd = currentDate.endOf('day').valueOf();
+
+            // 1. その日時点でのストリークを計算
+            // Calc.getCurrentStreak は referenceDate 時点での状況を返すように改修済み
+            const streak = Calc.getCurrentStreak(allLogs, allChecks, profile, currentDate);
+            const multiplier = Calc.getStreakMultiplier(streak);
+
+            // 2. その日の「運動ログ」かつ「ボーナス適用あり(と推測される)」ものを探して更新
+            // ※ v2仕様では「ボーナス適用のチェックボックス」があったが、
+            // データ上は memo に "Bonus" が入っているか等で判定していた。
+            // ここではシンプルに「全ての運動ログ」に対して、現在の正しいmultiplierを適用する。
+            // (手動でOFFにした意図を汲むのは難しいが、整合性優先で再適用する)
+            
+            const daysExerciseLogs = allLogs.filter(l => 
+                l.type === 'exercise' && 
+                l.timestamp >= dayStart && 
+                l.timestamp <= dayEnd
+            );
+
+            for (const log of daysExerciseLogs) {
+                // 基礎カロリー再計算
+                const mets = EXERCISE[log.exerciseKey] ? EXERCISE[log.exerciseKey].mets : 3.0;
+                const baseBurn = Calc.calculateExerciseBurn(mets, log.minutes, profile);
+                
+                // ボーナス適用
+                const creditInfo = Calc.calculateExerciseCredit(baseBurn, streak);
+                let newMemo = log.memo || '';
+                
+                // メモ内の古いボーナス表記を削除して更新
+                newMemo = newMemo.replace(/Streak Bonus x[0-9.]+/g, '').trim();
+                if (creditInfo.bonusMultiplier > 1.0) {
+                    newMemo = newMemo ? `${newMemo} Streak Bonus x${creditInfo.bonusMultiplier.toFixed(1)}` : `Streak Bonus x${creditInfo.bonusMultiplier.toFixed(1)}`;
+                }
+
+                // 値が変わる場合のみDB更新
+                if (Math.abs(log.kcal - creditInfo.kcal) > 0.1 || log.memo !== newMemo) {
+                    await db.logs.update(log.id, {
+                        kcal: creditInfo.kcal,
+                        memo: newMemo
+                    });
+                    updateCount++;
+                }
+            }
+
+            currentDate = currentDate.add(1, 'day');
+        }
+
+        if (updateCount > 0) {
+            console.log(`[Service] Updated ${updateCount} logs due to streak recalc.`);
+        }
+    },
+
+    /**
      * 飲酒ログの追加・更新
-     * @param {Object} data - modal.js/getBeerFormData からのデータ
-     * @param {number|null} id - 更新時のID (新規ならnull)
      */
     saveBeerLog: async (data, id = null) => {
-        const profile = Store.getProfile();
         let name, kcal, abv, carb;
-        let sizeLabel = data.size;
 
         if (data.isCustom) {
-            // カスタム入力
             name = data.type === 'dry' ? '蒸留酒 (糖質ゼロ)' : '醸造酒/カクテル';
             abv = data.abv;
             const ml = data.ml;
-            
-            // 糖質: 蒸留酒は0、醸造酒はビール並(3.0g/100ml)と仮定
             carb = data.type === 'dry' ? 0.0 : 3.0;
-            
-            // 修正: ローカルの計算関数を使用
-            kcal = calculateAlcoholCalories(ml, abv, carb);
-            
-            // 借金なので負の値にする
-            kcal = -Math.abs(kcal);
-            
-            sizeLabel = `${ml}ml`;
+            kcal = Calc.calculateBeerDebit(ml, abv, carb, 1);
         } else {
-            // プリセット選択
             const spec = STYLE_SPECS[data.style] || STYLE_SPECS['Custom'];
-            
-            // ユーザー指定ABVがあれば優先、なければスペック値
             abv = (data.userAbv !== undefined && !isNaN(data.userAbv)) ? data.userAbv : spec.abv;
             carb = spec.carb;
-            
-            // プリセットのサイズ (350, 500 etc)
             const sizeMl = parseInt(data.size); 
-            
-            // 修正: ローカルの計算関数を使用 (1本あたり)
-            const unitKcal = calculateAlcoholCalories(sizeMl, abv, carb);
-            
-            // 本数分
-            kcal = -Math.abs(unitKcal * data.count);
-            
+            kcal = Calc.calculateBeerDebit(sizeMl, abv, carb, data.count);
             name = `${data.style}`;
-            // 本数が1以外なら名前に追記
             if (data.count !== 1) name += ` x${data.count}`;
         }
 
@@ -70,20 +141,15 @@ export const Service = {
             timestamp: data.timestamp,
             type: 'beer',
             name: name,
-            kcal: kcal, // 負の値 (借金)
-            
-            // メタデータ
+            kcal: kcal, 
             style: data.isCustom ? 'Custom' : data.style,
             size: data.isCustom ? data.ml : data.size,
             count: data.isCustom ? 1 : data.count,
             abv: abv,
-            
             brewery: data.brewery,
             brand: data.brand,
             rating: data.rating,
             memo: data.memo,
-            
-            // カスタム情報
             isCustom: data.isCustom,
             customType: data.isCustom ? data.type : null,
             rawAmount: data.isCustom ? data.ml : null
@@ -94,8 +160,6 @@ export const Service = {
             UI.showMessage('📝 記録を更新しました', 'success');
         } else {
             await db.logs.add(logData);
-            
-            // 演出: カロリーが高い場合は警告、そうでなければ完了
             if (Math.abs(kcal) > 500) {
                 UI.showMessage(`🍺 記録完了！ ${Math.round(Math.abs(kcal))}kcalの借金です😱`, 'error');
             } else {
@@ -103,56 +167,55 @@ export const Service = {
             }
             UI.showConfetti();
 
-            // Untappd連携 (新規時のみ)
             if (data.useUntappd && data.brewery && data.brand) {
                 const query = encodeURIComponent(`${data.brewery} ${data.brand}`);
                 window.open(`https://untappd.com/search?q=${query}`, '_blank');
             }
         }
 
+        // ★追加: 過去データの変更によるストリーク再計算
+        await Service.recalcImpactedHistory(data.timestamp);
+
         await refreshUI();
     },
 
     /**
      * 運動ログの追加・更新
-     * @param {string} exerciseKey - EXERCISEのキー
-     * @param {number} minutes - 運動時間(分)
-     * @param {string} dateVal - YYYY-MM-DD
-     * @param {boolean} applyBonus - ストリークボーナス適用有無
-     * @param {number|null} id - 更新時のID
      */
     saveExerciseLog: async (exerciseKey, minutes, dateVal, applyBonus, id = null) => {
         const profile = Store.getProfile();
         const mets = EXERCISE[exerciseKey] ? EXERCISE[exerciseKey].mets : 3.0;
         
-        // 修正: logic.jsの burnRate を使用して正しく計算
-        const rate = Calc.burnRate(mets, profile);
-        let burnKcal = minutes * rate;
-        
+        const baseBurnKcal = Calc.calculateExerciseBurn(mets, minutes, profile);
+        let finalKcal = baseBurnKcal;
         let memo = '';
         
+        // タイムスタンプ生成
+        const ts = dayjs(dateVal).startOf('day').add(12, 'hour').valueOf();
+
         // ボーナス適用計算
         if (applyBonus) {
             const logs = await db.logs.toArray();
             const checks = await db.checks.toArray();
-            const streak = Calc.getCurrentStreak(logs, checks, profile);
-            const multiplier = Calc.getStreakMultiplier(streak);
+            // 指定日時点でのストリークを計算
+            const streak = Calc.getCurrentStreak(logs, checks, profile, dayjs(ts));
             
-            if (multiplier > 1.0) {
-                burnKcal = burnKcal * multiplier;
-                memo = `Streak Bonus x${multiplier.toFixed(1)}`;
+            const creditInfo = Calc.calculateExerciseCredit(baseBurnKcal, streak);
+            finalKcal = creditInfo.kcal;
+            
+            if (creditInfo.bonusMultiplier > 1.0) {
+                memo = `Streak Bonus x${creditInfo.bonusMultiplier.toFixed(1)}`;
             }
         }
 
-        const ts = dayjs(dateVal).startOf('day').add(12, 'hour').valueOf();
         const label = EXERCISE[exerciseKey] ? EXERCISE[exerciseKey].label : '運動';
 
         const logData = {
             timestamp: ts,
             type: 'exercise',
             name: label,
-            kcal: Math.abs(burnKcal), // 正の値 (返済)
-            minutes: minutes, // 記録用
+            kcal: finalKcal,
+            minutes: minutes,
             exerciseKey: exerciseKey,
             rawMinutes: minutes,
             memo: memo
@@ -168,6 +231,10 @@ export const Service = {
             UI.showConfetti();
         }
 
+        // ★追加: 運動ログの変更も、その後の整合性に影響する可能性があるため再計算
+        // (例: 運動したことでストリークが繋がった場合など)
+        await Service.recalcImpactedHistory(ts);
+
         await refreshUI();
     },
 
@@ -177,8 +244,15 @@ export const Service = {
     deleteLog: async (id) => {
         if (!confirm('この記録を削除しますか？')) return;
         try {
+            const log = await db.logs.get(parseInt(id));
+            const ts = log ? log.timestamp : Date.now();
+
             await db.logs.delete(parseInt(id));
             UI.showMessage('削除しました', 'success');
+            
+            // ★追加: 削除による影響再計算
+            await Service.recalcImpactedHistory(ts);
+
             await refreshUI();
         } catch (e) {
             console.error(e);
@@ -192,10 +266,21 @@ export const Service = {
     bulkDeleteLogs: async (ids) => {
         if (!confirm(`${ids.length}件のデータを削除しますか？`)) return;
         try {
+            // 最も古いログの日付を探す（再計算の起点にするため）
+            let oldestTs = Date.now();
+            for (const id of ids) {
+                const log = await db.logs.get(id);
+                if (log && log.timestamp < oldestTs) oldestTs = log.timestamp;
+            }
+
             await db.logs.bulkDelete(ids);
             UI.showMessage(`${ids.length}件削除しました`, 'success');
+            
+            // ★追加: 一括削除による影響再計算
+            await Service.recalcImpactedHistory(oldestTs);
+
             await refreshUI();
-            UI.toggleSelectAll(); // 選択解除
+            UI.toggleSelectAll(); 
         } catch (e) {
             console.error(e);
             UI.showMessage('一括削除に失敗しました', 'error');
@@ -208,7 +293,6 @@ export const Service = {
     saveDailyCheck: async (formData) => {
         const ts = dayjs(formData.date).startOf('day').add(12, 'hour').valueOf();
         
-        // 既存チェック確認
         const existing = await db.checks.where('timestamp')
             .between(dayjs(ts).startOf('day').valueOf(), dayjs(ts).endOf('day').valueOf())
             .first();
@@ -235,6 +319,9 @@ export const Service = {
         if (formData.weight) {
             localStorage.setItem(APP.STORAGE_KEYS.WEIGHT, formData.weight);
         }
+
+        // ★追加: 休肝日情報の変更はストリークに直結するため再計算
+        await Service.recalcImpactedHistory(ts);
 
         await refreshUI();
     },
