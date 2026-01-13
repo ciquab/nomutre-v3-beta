@@ -280,3 +280,52 @@ export const Calc = {
         return best;
     }
 };
+
+// ----------------------------------------------------------------
+    // 【追加】 不足していたメソッド
+    // ----------------------------------------------------------------
+
+    /**
+     * 指定日に飲酒ログがあるか (checkStatus.jsで使用)
+     */
+    hasAlcoholLog: (logs, timestamp) => {
+        const target = dayjs(timestamp);
+        return logs.some(l => l.type === 'beer' && dayjs(l.timestamp).isSame(target, 'day'));
+    },
+
+    /**
+     * 日付ごとのステータス判定 (weekly.js/heatmapで使用)
+     */
+    getDayStatus: (date, logs, checks, profile) => {
+        const d = dayjs(date);
+        const dayStart = d.startOf('day').valueOf();
+        const dayEnd = d.endOf('day').valueOf();
+
+        const dayLogs = logs.filter(l => l.timestamp >= dayStart && l.timestamp <= dayEnd);
+        const dayCheck = checks.find(c => c.timestamp >= dayStart && c.timestamp <= dayEnd);
+
+        const hasBeer = dayLogs.some(l => l.type === 'beer');
+        const hasExercise = dayLogs.some(l => l.type === 'exercise');
+        const isDryDay = dayCheck ? dayCheck.isDryDay : false;
+
+        // 収支計算 (簡易: ログのkcalが正なら運動、負なら飲酒と想定されるが、ここでは単純にkcalを積算)
+        // 運動ログのkcalは正、飲酒ログのkcalは負で保存されている前提
+        let balance = 0;
+        dayLogs.forEach(l => {
+            // kcalが未定義の場合は簡易計算で補完
+            const val = l.kcal !== undefined ? l.kcal : (l.type === 'exercise' ? (l.minutes * Calc.burnRate(6.0, profile)) : -150);
+            balance += val;
+        });
+
+        if (isDryDay) return hasExercise ? 'rest_exercise' : 'rest';
+        if (hasBeer) {
+            if (hasExercise) {
+                // 飲んで運動して、収支がプラス（完済）なら success
+                return balance >= 0 ? 'drink_exercise_success' : 'drink_exercise';
+            }
+            return 'drink';
+        }
+        if (hasExercise) return 'exercise';
+        return 'none';
+    }
+};
