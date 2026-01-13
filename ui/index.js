@@ -9,7 +9,7 @@ import { renderLiverRank } from './liverRank.js';
 import { renderCheckStatus } from './checkStatus.js';
 import { renderWeeklyAndHeatUp, renderHeatmap } from './weekly.js';
 import { renderChart } from './chart.js';
-import { updateLogListView, toggleEditMode, toggleSelectAll, updateBulkCount } from './logList.js';
+import { updateLogListView, toggleEditMode, toggleSelectAll, updateBulkCount, setFetchLogsHandler } from './logList.js';
 import { 
     getBeerFormData, resetBeerForm, openBeerModal, switchBeerInputTab, 
     openCheckModal, openManualInput, openSettings, openHelp, openLogDetail,
@@ -21,15 +21,46 @@ import dayjs from 'https://cdn.jsdelivr.net/npm/dayjs@1.11.10/+esm';
 // UI集約オブジェクト
 export const UI = {
     // 外部APIハンドラ
-    _fetchLogsHandler: null,
+    // LogListモジュールへ委譲
+    setFetchLogsHandler: (fn) => { setFetchLogsHandler(fn); },
+
     _fetchAllDataHandler: null,
-    setFetchLogsHandler: (fn) => { UI._fetchLogsHandler = fn; },
     setFetchAllDataHandler: (fn) => { UI._fetchAllDataHandler = fn; },
 
     getTodayString: () => dayjs().format('YYYY-MM-DD'),
 
     // DOM/Utility (dom.jsより)
-    initDOM: DOM.init,
+    // initDOM を拡張してイベントリスナー設定を含める
+    initDOM: () => {
+        DOM.init();
+        UI.setupGlobalEventListeners();
+    },
+    
+    // dom.js から移動したイベント設定ロジック
+    setupGlobalEventListeners: () => {
+        // ログリストのエンプティステート内のボタン
+        const logListEl = document.getElementById('log-list');
+        if (logListEl) {
+            logListEl.addEventListener('click', (e) => {
+                const triggerBtn = e.target.closest('[data-action="trigger-beer-modal"]');
+                if (triggerBtn) {
+                    openBeerModal(null);
+                }
+            });
+        }
+
+        // 週間スタンプのクリックイベント
+        const weeklyStampsEl = document.getElementById('weekly-stamps');
+        if (weeklyStampsEl) {
+            weeklyStampsEl.addEventListener('click', (e) => {
+                const cell = e.target.closest('[data-date]');
+                if (cell) {
+                    openBeerModal(null, cell.dataset.date);
+                }
+            });
+        }
+    },
+
     toggleModal,
     showConfetti,
     showMessage,
@@ -40,7 +71,7 @@ export const UI = {
     StateManager,
 
     // LogList (logList.jsより)
-    updateLogListView, // 外部公開するかは微妙だが、tab switch等で使う
+    updateLogListView, 
     toggleEditMode,
     toggleSelectAll,
     updateBulkCount,

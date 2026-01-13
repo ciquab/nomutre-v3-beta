@@ -3,8 +3,11 @@ import { Calc } from '../logic.js';
 import { Store } from '../store.js';
 import { StateManager } from './state.js';
 import { DOM, toggleModal, escapeHtml, toggleDryDay } from './dom.js';
-import { UI } from './index.js'; // getTodayString参照用
+// import { UI } from './index.js'; // 削除: UIへの依存を排除
 import dayjs from 'https://cdn.jsdelivr.net/npm/dayjs@1.11.10/+esm';
+
+// UI.getTodayString() の代わり
+const getTodayString = () => dayjs().format('YYYY-MM-DD');
 
 // 【新規】フォームデータ収集ヘルパー (main.jsへロジック移動のため)
 export const getBeerFormData = () => {
@@ -14,7 +17,7 @@ export const getBeerFormData = () => {
     const rating = parseInt(document.getElementById('beer-rating').value) || 0;
     const memo = document.getElementById('beer-memo').value;
     const useUntappd = document.getElementById('untappd-check').checked;
-    const ts = dateVal ? dayjs(dateVal).startOf('day').add(12, 'hour').valueOf() : Date.now(); // 簡易再実装
+    const ts = dateVal ? dayjs(dateVal).startOf('day').add(12, 'hour').valueOf() : Date.now(); 
 
     const isCustom = !document.getElementById('beer-input-custom').classList.contains('hidden');
     
@@ -58,11 +61,7 @@ export const resetBeerForm = (keepDate = false) => {
     if(document.getElementById('custom-amount')) document.getElementById('custom-amount').value = '';
 
     if (!keepDate) {
-        // 日付もリセットする場合 (デフォルト挙動)
-        // 日付入力欄は基本的に前回の値を保持するか、今日に戻すか... 
-        // ここでは今日に戻さない（連続入力時は日付変えない方が便利）が、
-        // 完全リセットなら今日にする
-        // document.getElementById('beer-date').value = UI.getTodayString();
+        // デフォルトでは日付は維持、必要なら getTodayString() でリセット
     }
     
     // スクロールを一番上へ (フォームが長い場合)
@@ -81,11 +80,10 @@ export const openBeerModal = (log = null, targetDate = null, isCopy = false) => 
     const ratingInput = document.getElementById('beer-rating');
     const memoInput = document.getElementById('beer-memo');
     
-    // 静的に配置されたボタンをIDで直接取得
     const submitBtn = document.getElementById('beer-submit-btn');
     const nextBtn = document.getElementById('btn-save-next');
 
-    // モード判定: ログがあり、かつコピーモードでない場合は「更新(編集)」
+    // モード判定
     const isUpdateMode = log && !isCopy;
 
     // --- 日付設定 ---
@@ -95,11 +93,11 @@ export const openBeerModal = (log = null, targetDate = null, isCopy = false) => 
         } else if (isUpdateMode) {
             dateEl.value = dayjs(log.timestamp).format('YYYY-MM-DD');
         } else {
-            dateEl.value = UI.getTodayString();
+            dateEl.value = getTodayString();
         }
     }
 
-    // --- フォーム初期化 (デフォルト値) ---
+    // --- フォーム初期化 ---
     if (styleSelect) {
         const modes = Store.getModes();
         const currentMode = StateManager.beerMode; 
@@ -122,7 +120,6 @@ export const openBeerModal = (log = null, targetDate = null, isCopy = false) => 
     // --- ボタンの表示切り替え ---
     if (submitBtn && nextBtn) {
         if (isUpdateMode) {
-            // 編集モード: 「更新して閉じる」のみ表示 (全幅)
             submitBtn.innerHTML = '<span class="text-sm">更新して閉じる</span>';
             submitBtn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
             submitBtn.classList.add('bg-green-600', 'hover:bg-green-700', 'col-span-2'); 
@@ -130,7 +127,6 @@ export const openBeerModal = (log = null, targetDate = null, isCopy = false) => 
             
             nextBtn.classList.add('hidden');
         } else {
-            // 新規・コピーモード: 2つのボタンを表示 (半幅ずつ)
             submitBtn.innerHTML = '<span class="text-sm">保存して閉じる</span>';
             submitBtn.classList.add('bg-indigo-600', 'hover:bg-indigo-700', 'col-span-1');
             submitBtn.classList.remove('bg-green-600', 'hover:bg-green-700', 'col-span-2');
@@ -139,7 +135,7 @@ export const openBeerModal = (log = null, targetDate = null, isCopy = false) => 
         }
     }
 
-    // --- データの充填 (編集 または コピー) ---
+    // --- データの充填 ---
     if (log) {
         if (breweryInput) breweryInput.value = log.brewery || '';
         if (brandInput) brandInput.value = log.brand || '';
@@ -225,7 +221,7 @@ export const openCheckModal = (check = null, dateStr = null) => {
             submitBtn.classList.add('bg-orange-500', 'hover:bg-orange-600');
         }
     } else {
-        if (dateEl) dateEl.value = dateStr || UI.getTodayString();
+        if (dateEl) dateEl.value = dateStr || getTodayString();
         
         if (submitBtn) {
             submitBtn.textContent = '完了';
@@ -248,31 +244,22 @@ export const openManualInput = (log = null, isCopy = false) => {
     if (!select || !dateEl || !minInput || !bonusCheck || !submitBtn) return;
 
     if (log) {
-        // logがある場合：編集またはコピー
-        
         if (isCopy) {
-            // 【コピーモード】
-            // ボタンは「記録する」、日付は「今日」
             submitBtn.textContent = '記録する';
             submitBtn.classList.add('bg-green-500', 'hover:bg-green-600');
             submitBtn.classList.remove('bg-orange-500', 'hover:bg-orange-600');
-            dateEl.value = UI.getTodayString();
+            dateEl.value = getTodayString();
         } else {
-            // 【編集モード】
-            // ボタンは「更新する」、日付はログの日付
             submitBtn.textContent = '更新する';
             submitBtn.classList.remove('bg-green-500', 'hover:bg-green-600');
             submitBtn.classList.add('bg-orange-500', 'hover:bg-orange-600');
             dateEl.value = dayjs(log.timestamp).format('YYYY-MM-DD');
         }
 
-        // --- 共通: 値の充填 ---
         minInput.value = log.rawMinutes || '';
         
-        // 運動の種類を選択状態にする
         let key = log.exerciseKey;
         if (!key) {
-            // 古いデータ対応: 名前から逆引き
             const logName = log.name || '';
             const entry = Object.entries(EXERCISE).find(([k, v]) => logName.includes(v.label));
             if (entry) key = entry[0];
@@ -281,20 +268,17 @@ export const openManualInput = (log = null, isCopy = false) => {
             select.value = key;
         }
 
-        // ボーナス有無の復元
         const hasBonus = log.memo && log.memo.includes('Bonus');
         bonusCheck.checked = hasBonus;
 
-        // ラベル更新
         if (nameEl) nameEl.textContent = EXERCISE[select.value]?.label || '運動';
 
     } else {
-        // 【新規モード】
         submitBtn.textContent = '記録する';
         submitBtn.classList.add('bg-green-500', 'hover:bg-green-600');
         submitBtn.classList.remove('bg-orange-500', 'hover:bg-orange-600');
         
-        dateEl.value = UI.getTodayString();
+        dateEl.value = getTodayString();
         minInput.value = '';
         bonusCheck.checked = true; // デフォルトON
         
@@ -352,10 +336,8 @@ export const updateModeSelector = () => {
 export const openLogDetail = (log) => {
     if (!DOM.elements['log-detail-modal']) return;
 
-    // kcal基準で判定
     const isDebt = (log.kcal !== undefined ? log.kcal : log.minutes) < 0;
     
-    // アイコン決定
     let iconChar = isDebt ? '🍺' : '🏃‍♀️';
     if (isDebt && log.style && STYLE_METADATA[log.style]) {
         iconChar = STYLE_METADATA[log.style].icon;
@@ -406,22 +388,14 @@ export const openLogDetail = (log) => {
         DOM.elements['detail-memo-container'].classList.add('hidden');
     }
 
-    // ★修正: コピーボタンの制御
     const copyBtn = DOM.elements['btn-detail-copy'] || document.getElementById('btn-detail-copy');
     if (copyBtn) {
-        // 常に表示 (運動でも飲酒でもコピー可能に)
         copyBtn.classList.remove('hidden');
-        
-        // イベントハンドラ再設定
         copyBtn.onclick = () => {
-            // 詳細モーダルを閉じる
             toggleModal('log-detail-modal', false);
-            
             if (isDebt) {
-                // 飲酒ログのコピー (第3引数 true = コピーモード)
                 openBeerModal(log, null, true);
             } else {
-                // 運動ログのコピー (第2引数 true = コピーモード)
                 openManualInput(log, true);
             }
         };
@@ -432,17 +406,13 @@ export const openLogDetail = (log) => {
     toggleModal('log-detail-modal', true);
 };
 
-// プリセット選択肢の更新 (main.jsからインポートされる)
 export const updateBeerSelectOptions = () => {
     const s = document.getElementById('beer-select');
     if (!s) return;
     
-    // 現在の選択値を保持
     const currentVal = s.value;
     s.innerHTML = '';
     
-    // CALORIES.STYLESの全キーを選択肢として生成
-    // (将来的にモードに応じた並び替えを行う場合はここにロジックを追加)
     Object.keys(CALORIES.STYLES).forEach(k => {
         const o = document.createElement('option');
         o.value = k;
@@ -450,7 +420,6 @@ export const updateBeerSelectOptions = () => {
         s.appendChild(o);
     });
     
-    // 選択値の復元、または初期値設定
     const modes = Store.getModes();
     if (currentVal && CALORIES.STYLES[currentVal]) {
         s.value = currentVal;
@@ -459,7 +428,6 @@ export const updateBeerSelectOptions = () => {
     }
 };
 
-// 【新規】サジェスト機能の更新
 export const updateInputSuggestions = (logs) => {
     const breweries = new Set();
     const brands = new Set();
@@ -488,12 +456,10 @@ export const updateInputSuggestions = (logs) => {
     updateList('brand-list', brands);
 };
 
-// 【修正】いつものボタン: サイズ拡大とアイコン強調 (Task 1: UX/Design)
 export const renderQuickButtons = (logs) => {
     const container = document.getElementById('quick-input-area');
     if (!container) return;
     
-    // 履歴から頻出の組み合わせを集計
     const counts = {};
     logs.forEach(l => {
         const isDebt = l.kcal !== undefined ? l.kcal < 0 : l.minutes < 0;
@@ -503,7 +469,6 @@ export const renderQuickButtons = (logs) => {
         }
     });
 
-    // 上位2件を取得
     const topShortcuts = Object.keys(counts)
         .sort((a, b) => counts[b] - counts[a])
         .slice(0, 2)
@@ -517,18 +482,12 @@ export const renderQuickButtons = (logs) => {
         return;
     }
 
-    // ボタン描画
     container.innerHTML = topShortcuts.map(item => {
         const sizeLabel = SIZE_DATA[item.size] ? SIZE_DATA[item.size].label.replace(/ \(.*\)/, '') : item.size;
         
-        // XSS対策
         const styleEsc = escapeHtml(item.style);
         const sizeEsc = escapeHtml(sizeLabel);
         
-        // ★修正ポイント:
-        // 1. py-3 -> py-4 (タップ領域拡大)
-        // 2. アイコンサイズ拡大 (text-2xl) とホバーエフェクト追加
-        // 3. "HISTORY" バッジを追加してショートカットであることを明示
         return `<button data-style="${styleEsc}" data-size="${item.size}" 
             class="quick-beer-btn flex-1 bg-white dark:bg-gray-800 border-2 border-indigo-100 dark:border-indigo-900 
             text-indigo-600 dark:text-indigo-300 font-bold py-4 rounded-2xl shadow-md 
@@ -541,6 +500,4 @@ export const renderQuickButtons = (logs) => {
             <span class="text-[10px] opacity-70">${sizeEsc}</span>
         </button>`;
     }).join('');
-
 };
-

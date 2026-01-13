@@ -1,6 +1,6 @@
 import { APP } from '../constants.js';
 import confetti from 'https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/+esm';
-import { UI } from './index.js'; // 循環参照注意: イベントリスナー内での呼び出し用
+// import { UI } from './index.js'; // 削除: 循環参照の原因となるため削除
 
 export const DOM = {
     isInitialized: false,
@@ -41,37 +41,15 @@ export const DOM = {
             if (el) {
                 DOM.elements[id] = el;
             } else {
-                // 開発時警告: 必須IDが見つからない場合
-                console.warn(`[UI.initDOM] Element with id '${id}' not found. Check HTML structure.`);
+                console.warn(`[DOM.init] Element with id '${id}' not found. Check HTML structure.`);
             }
         });
     
         injectPresetAbvInput();
         injectHeatmapContainer();
         
-        // イベントデリゲーションの設定
-        const logListEl = document.getElementById('log-list');
-        if (logListEl) {
-            logListEl.addEventListener('click', (e) => {
-                const triggerBtn = e.target.closest('[data-action="trigger-beer-modal"]');
-                if (triggerBtn) {
-                    UI.openBeerModal(null);
-                }
-            });
-        }
-
-        // ★追加: カレンダー日付タップのイベント
-        const weeklyStampsEl = DOM.elements['weekly-stamps'] || document.getElementById('weekly-stamps');
-        if (weeklyStampsEl) {
-            weeklyStampsEl.addEventListener('click', (e) => {
-                // data-date属性を持つ要素、またはその親要素をクリックした場合
-                const cell = e.target.closest('[data-date]');
-                if (cell) {
-                    // その日付で入力モーダルを開く (新規作成モード)
-                    UI.openBeerModal(null, cell.dataset.date);
-                }
-            });
-        }
+        // 削除: ここにあったイベントリスナー設定ロジックは ui/index.js へ移動
+        // DOM.js は純粋に要素の初期化のみを担当する
 
         DOM.isInitialized = true;
     }
@@ -168,10 +146,6 @@ export const injectPresetAbvInput = () => {
 
     if(sizeSelect.parentNode && sizeSelect.parentNode.parentNode) {
             sizeSelect.parentNode.parentNode.insertBefore(container, sizeSelect.parentNode.nextSibling); 
-            // 位置調整: Size/Count行の前に挿入したい場合は調整
-            // ここではSize要素の親の親（grid）の前か中か...
-            // 既存HTML構造: SizeとCountは .grid-cols-2 の中。
-            // プリセットABVはその上に入れたい。
             const grid = sizeSelect.closest('.grid');
             if(grid) {
                 grid.parentNode.insertBefore(container, grid);

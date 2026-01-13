@@ -3,8 +3,16 @@ import { Calc } from '../logic.js';
 import { Store } from '../store.js';
 import { StateManager } from './state.js';
 import { DOM, escapeHtml } from './dom.js';
-import { UI } from './index.js'; // fetchLogsHandler参照用
+// import { UI } from './index.js'; // 削除: UIへの依存を排除
 import dayjs from 'https://cdn.jsdelivr.net/npm/dayjs@1.11.10/+esm';
+
+// 内部で保持するハンドラ
+let _fetchLogsHandler = null;
+
+// ハンドラ設定用関数（UI/index.jsから呼ぶ）
+export const setFetchLogsHandler = (fn) => {
+    _fetchLogsHandler = fn;
+};
 
 // ログリスト管理のメイン関数
 export async function updateLogListView(isAppend = false) {
@@ -22,27 +30,19 @@ export async function updateLogListView(isAppend = false) {
     StateManager.setLogLoading(true);
 
     try {
-        // ハンドラが設定されていない場合は警告を出して中断（安全策）
-        if (!UI._fetchLogsHandler) {
-            console.warn("UI._fetchLogsHandler is not set. Skipping data load.");
-            // 開発中はエラーに気づけるようコンソールに出す
+        if (!_fetchLogsHandler) {
+            console.warn("fetchLogsHandler is not set. Skipping data load.");
             return;
         }
 
         const currentLimit = StateManager.logLimit;
-        // 追加読み込みなら、前の末尾(currentLimit - 50)から取得
         const offset = isAppend ? currentLimit - 50 : 0; 
         const limit = 50;
         
-        // ★修正ポイント: 
-        // db.logs (Dexie) への直接依存を排除し、注入されたハンドラ経由でデータを取得
-        // main.js側で { logs, totalCount } を返す関数をセットする前提となります
-        const { logs, totalCount } = await UI._fetchLogsHandler(offset, limit);
+        // ハンドラ経由で取得
+        const { logs, totalCount } = await _fetchLogsHandler(offset, limit);
 
-        // 描画実行 (既存の renderLogList を使用)
         renderLogList(logs, isAppend);
-
-        // センチネル（監視要素）の管理 (既存の manageInfiniteScrollSentinel を使用)
         manageInfiniteScrollSentinel(totalCount > currentLimit);
 
     } catch (e) {
@@ -66,7 +66,6 @@ export function manageInfiniteScrollSentinel(hasMore) {
         sentinel.textContent = "Loading more...";
         listContainer.appendChild(sentinel);
 
-        // IntersectionObserverの設定
         if (window.logObserver) window.logObserver.disconnect();
         
         window.logObserver = new IntersectionObserver((entries) => {
@@ -78,7 +77,6 @@ export function manageInfiniteScrollSentinel(hasMore) {
 
         window.logObserver.observe(sentinel);
     } else {
-        // 全件表示済み
         if (listContainer.children.length > 0) {
             const endMsg = document.createElement('div');
             endMsg.className = "py-8 text-center text-[10px] text-gray-300 font-bold uppercase tracking-widest";
@@ -88,12 +86,11 @@ export function manageInfiniteScrollSentinel(hasMore) {
     }
 }
 
-// ログリスト描画 (カロリー基準対応 & 追記モード対応)
+// ログリスト描画
 export function renderLogList(logs, isAppend) {
     const list = DOM.elements['log-list'] || document.getElementById('log-list');
-    if (!list) return; // ガード節
+    if (!list) return;
 
-    // データ0件（初回）の場合のエンプティステート
     if (!isAppend && logs.length === 0) {
         list.innerHTML = `
             <div class="text-center py-10 px-4">
@@ -143,12 +140,10 @@ export function renderLogList(logs, isAppend) {
 
         const date = dayjs(log.timestamp).format('MM/DD HH:mm');
         
-        // --- XSS対策の適用 ---
         const safeName = escapeHtml(log.name);
         const safeBrewery = escapeHtml(log.brewery);
         const safeBrand = escapeHtml(log.brand);
         const safeMemo = escapeHtml(log.memo);
-        // -------------------
 
         let detailHtml = '';
         if (log.brewery || log.brand) {

@@ -132,3 +132,31 @@ Object.keys(CALORIES.STYLES).forEach(style => {
 
 export const EXERCISE = { 'stepper': { label: 'ステッパー', mets: 6.0, icon: '🏃‍♀️' }, 'walking': { label: 'ウォーキング (通勤等)', mets: 3.5, icon: '🚶' }, 'brisk_walking': { label: '早歩き', mets: 4.5, icon: '👟' }, 'cycling': { label: '自転車 (ゆっくり)', mets: 4.0, icon: '🚲' }, 'training': { label: '筋トレ (パーソナル等)', mets: 5.0, icon: '🏋️' }, 'running': { label: 'ランニング', mets: 7.0, icon: '💨' }, 'hiit': { label: 'HIIT (高強度)', mets: 8.0, icon: '🔥' }, 'yoga': { label: 'ヨガ (ストレッチ)', mets: 2.5, icon: '🧘' }, 'cleaning': { label: '部屋の掃除', mets: 3.0, icon: '🧹' } };
 export const SIZE_DATA = { '350': { label: '350ml (缶)', ratio: 1.0 }, '500': { label: '500ml (ロング缶)', ratio: 1.43 }, '473': { label: '473ml (USパイント)', ratio: 1.35 }, '568': { label: '568ml (UKパイント)', ratio: 1.62 }, '250': { label: '250ml (小グラス)', ratio: 0.71 }, '1000': { label: '1L (マース)', ratio: 2.86 } };
+
+export const ALCOHOL_CONSTANTS = {
+    ETHANOL_DENSITY: 0.789,
+    CARB_CALORIES: 4.0
+};
+
+// 【移動】main.js から移動したスタイル定義
+export const STYLE_SPECS = {
+    'ラガー': { abv: 5.0, carb: 3.5 },
+    'エール': { abv: 5.5, carb: 3.8 },
+    'ピルスナー': { abv: 5.0, carb: 3.2 },
+    '黒ビール': { abv: 5.0, carb: 4.2 },
+    'IPA (West Coast)': { abv: 6.5, carb: 3.8 },
+    'Hazy IPA': { abv: 7.0, carb: 4.5 },
+    'セッションIPA': { abv: 4.5, carb: 3.0 },
+    'ダブルIPA': { abv: 8.0, carb: 5.0 },
+    'ペールエール': { abv: 5.0, carb: 3.0 },
+    'アンバーエール': { abv: 5.5, carb: 3.6 },
+    'ポーター': { abv: 5.5, carb: 4.0 },
+    'スタウト': { abv: 6.0, carb: 4.5 },
+    'インペリアルスタウト': { abv: 9.0, carb: 5.5 },
+    'ベルジャン・トリペル': { abv: 8.5, carb: 4.5 },
+    'バーレイワイン': { abv: 10.0, carb: 6.0 },
+    'サワーエール': { abv: 5.0, carb: 3.5 },
+    'フルーツビール': { abv: 5.0, carb: 5.0 }, // 糖質高め
+    'ノンアル': { abv: 0.0, carb: 2.0 }, // カロリーはある
+    'Custom': { abv: 5.0, carb: 3.0 } // デフォルト
+};
