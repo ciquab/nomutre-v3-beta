@@ -106,7 +106,7 @@ export function renderBeerTank(currentBalanceKcal) {
                 suggestionEl.innerHTML = `
                     <span class="block mb-1 font-bold opacity-70">💡 ヒント: これで完済！</span>
                     <span class="flex items-center justify-center gap-1 text-indigo-600 dark:text-indigo-400 font-bold">
-                        ${suggestion.icon} ${suggestion.exerciseLabel}なら <span class="text-lg underline">${suggestion.minutes}</span> 分
+                        ${suggestion.icon} ${suggestion.label}なら <span class="text-lg underline">${suggestion.mins}</span> 分
                     </span>
                 `;
             }
