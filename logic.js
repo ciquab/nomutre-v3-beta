@@ -189,14 +189,22 @@ export const Calc = {
             const dayLogs = logMap.get(dateStr) || { hasBeer: false, hasExercise: false };
             const isDryCheck = checkMap.get(dateStr) || false;
 
-            const isDry = isDryCheck || (!dayLogs.hasBeer);
+            // ★修正ポイント: 
+            // 「今日」の場合は、「記録がない＝休肝日」という見なしルールを適用しない。
+            // (まだ一日が終わっておらず、記録していないだけかもしれないため)
+            const isToday = checkDate.isSame(dayjs(), 'day');
+            
+            // 過去の日付なら「ビール記録なし」でOK。今日なら「明示的な休肝チェック」が必要。
+            const isPassiveDryAllowed = !isToday; 
+            
+            const isDry = isDryCheck || (isPassiveDryAllowed && !dayLogs.hasBeer);
             const workedOut = dayLogs.hasExercise;
 
             if (isDry || workedOut) {
                 streak++;
                 checkDate = checkDate.subtract(1, 'day');
             } else {
-                break; // 飲んだし動かなかった
+                break; // 飲んだ、または今日で記録がない
             }
             if (streak > 3650) break; 
         }
