@@ -280,7 +280,7 @@ const handleDetailShare = async () => {
 
 const shareToSocial = async (text) => {
     if (navigator.share) {
-        try { await navigator.share({ title: 'ノムトレ', text: text, url: window.location.href }); } 
+        try { await navigator.share({ title: 'ノムトレ', text: text }); } 
         catch (err) { console.log('Share canceled'); }
     } else {
         window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(window.location.href)}`, '_blank');

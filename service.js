@@ -165,8 +165,6 @@ export const Service = {
             } else {
                 UI.showMessage('🍺 記録しました！', 'success');
             }
-            UI.showConfetti();
-
             if (data.useUntappd && data.brewery && data.brand) {
                 const query = encodeURIComponent(`${data.brewery} ${data.brand}`);
                 window.open(`https://untappd.com/search?q=${query}`, '_blank');
