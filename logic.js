@@ -227,7 +227,7 @@ export const Calc = {
     /**
      * ランク判定ロジック
      */
-    getRecentGrade: (checks, logs, profile) => {
+getRecentGrade: (checks, logs, profile) => {
         const safeLogs = Array.isArray(logs) ? logs : [];
         const safeChecks = Array.isArray(checks) ? checks : [];
 
@@ -278,10 +278,9 @@ export const Calc = {
         const best = candidates.find(c => c.mins <= 30) || candidates.find(c => c.mins <= 60) || candidates[0];
         
         return best;
-    }
-},
+    }, // ★ここにあった `}` を削除し、カンマだけ残しました
 
-// ----------------------------------------------------------------
+    // ----------------------------------------------------------------
     // 【追加】 不足していたメソッド
     // ----------------------------------------------------------------
 
