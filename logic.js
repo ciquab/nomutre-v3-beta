@@ -122,22 +122,36 @@ export const Calc = {
      * 基準日に活動(飲酒or運動or休肝チェック)があればそこから、なければ前日から遡る。
      */
     getCurrentStreak: (logs, checks, profile, referenceDate = null) => {
-        const targetDate = referenceDate ? dayjs(referenceDate) : dayjs();
-        const startOfTargetDay = targetDate.startOf('day');
-        const endOfTargetDay = targetDate.endOf('day');
-        
         const safeLogs = Array.isArray(logs) ? logs : [];
         const safeChecks = Array.isArray(checks) ? checks : [];
 
+        // 【修正1】データが全くない場合は即座に0を返す
+        if (safeLogs.length === 0 && safeChecks.length === 0) {
+            return 0;
+        }
+
+        // 【修正2】最古の記録日を探す (これ以前はストリークに含めない)
+        let minTs = Number.MAX_SAFE_INTEGER;
+        let found = false;
+
+        safeLogs.forEach(l => {
+            if (l.timestamp < minTs) { minTs = l.timestamp; found = true; }
+        });
+        safeChecks.forEach(c => {
+            if (c.timestamp < minTs) { minTs = c.timestamp; found = true; }
+        });
+
+        // データがある場合、その日を「開始日」とする
+        const firstDate = found ? dayjs(minTs).startOf('day') : dayjs();
+
+        const targetDate = referenceDate ? dayjs(referenceDate) : dayjs();
+        
         // 基準日「そのもの」に活動があるかチェック
-        // ※基準日より未来のログはカウントしてはいけないため、フィルタリングまたは厳密な日付一致で判定
         const hasLogOnTarget = safeLogs.some(l => {
-            const d = dayjs(l.timestamp);
-            return d.isSame(targetDate, 'day');
+            return dayjs(l.timestamp).isSame(targetDate, 'day');
         });
         const hasCheckOnTarget = safeChecks.some(c => {
-            const d = dayjs(c.timestamp);
-            return d.isSame(targetDate, 'day');
+            return dayjs(c.timestamp).isSame(targetDate, 'day');
         });
 
         // 基準日に活動があればそこからスタート、なければ前日からスタート
@@ -148,9 +162,6 @@ export const Calc = {
         // 高速化のためMap化
         const logMap = new Map();
         const checkMap = new Map();
-
-        // 未来のデータを含まないようにフィルタリングしてマップ化
-        // (過去ログ編集時の再計算で、その時点での状態を再現するため)
         const checkDateEndLimit = checkDate.endOf('day').valueOf();
 
         safeLogs.forEach(l => {
@@ -169,42 +180,18 @@ export const Calc = {
         });
 
         while (true) {
+            // 【修正3】チェック日が「最古の記録日」より前になったら終了
+            if (checkDate.isBefore(firstDate, 'day')) {
+                break;
+            }
+
             const dateStr = checkDate.format('YYYY-MM-DD');
-            
             const dayLogs = logMap.get(dateStr) || { hasBeer: false, hasExercise: false };
             const isDryCheck = checkMap.get(dateStr) || false;
 
-            // ロジック: 休肝日チェックがある OR (飲酒ログがない AND (運動ログがある OR 休肝ログがある...はisDryCheckでカバー済))
-            // つまり: 「休肝宣言」または「飲んでない日」または「運動した日」？
-            // v2の定義: (休肝日チェックがついている) OR (飲酒ログがない) ...これだと記録忘れもストリークになる？
-            // いや、v2のgetCurrentStreak実装を見ると:
-            // if (isDry || workedOut) streak++;
-            // ここで isDry = isDryCheck || (!dayLogs.hasBeer); となっているが
-            // !dayLogs.hasBeer だけだと「何も記録していない日」もTrueになる。
-            // しかし、whileループは「連続している限り」続く。
-            // 何も記録がない日は logMap にエントリがなく、isDryCheckもfalse。
-            // なので isDry = false || (!false) = true になってしまうバグがv2コードにあった可能性があるが、
-            // ここでは提供されたv2コードの挙動を忠実に再現する。
-            
-            // v2 logic.js再確認:
-            // const isDry = isDryCheck || (!dayLogs.hasBeer);
-            // これは「明示的な休肝」または「ビールを飲んでいない（運動だけ、あるいは記録なし）」を指す。
-            // しかし、ストリークが途切れる条件は「飲酒したのに運動していない」または「何もしないで記録途絶」のはず。
-            
-            // 正しい解釈:
-            // ストリークは「良い行い」が続いている日数。
-            // 1. 飲酒ログがある -> ストリーク切れ（運動してれば継続？v2では workedOut があれば継続）
-            // 2. 飲酒ログがない -> 継続
-            
             const isDry = isDryCheck || (!dayLogs.hasBeer);
             const workedOut = dayLogs.hasExercise;
 
-            // 「飲酒あり(isDry=false)」かつ「運動なし(workedOut=false)」の場合のみブレイク
-            // つまり「飲んで動かなかった日」でストリークは止まる。
-            // ※「記録なし」の日も (!hasBeer) = true となり継続してしまうが、
-            //  これはv2の仕様（記録忘れは善意に解釈、あるいは直近ログから遡る仕様）に準拠。
-            //  ただし、無限ループ防止の 3650日制限があるため安全性は担保される。
-            
             if (isDry || workedOut) {
                 streak++;
                 checkDate = checkDate.subtract(1, 'day');
@@ -278,7 +265,7 @@ getRecentGrade: (checks, logs, profile) => {
         const best = candidates.find(c => c.mins <= 30) || candidates.find(c => c.mins <= 60) || candidates[0];
         
         return best;
-    }, // ★ここにあった `}` を削除し、カンマだけ残しました
+    },
 
     // ----------------------------------------------------------------
     // 【追加】 不足していたメソッド
